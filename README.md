@@ -6,7 +6,7 @@
 
 
 ## Usage
-python BiLSTM-Tagger.py --bidir True --bidir
+python BiLSTM-Tagger.py --bidir True --hidden_size 128 --epoch 10 --layers 2
 
 
 ### Tips
