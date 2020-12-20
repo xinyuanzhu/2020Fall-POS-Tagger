@@ -10,9 +10,9 @@ import numpy as np
 import time
 import random
 import os
-
+from torchtext.vocab import Vectors
 import argparse
-
+from utils import *
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--bidir', default=True)
@@ -56,6 +56,7 @@ print(f"Number of testing examples: {len(test_data)}")
 
 MIN_FREQ = 2
 
+
 TEXT.build_vocab(train_data,
                  min_freq=MIN_FREQ,
                  vectors="glove.6B.100d",
@@ -67,27 +68,37 @@ TEXT.build_vocab(train_data,
 UD_TAGS.build_vocab(train_data)
 
 
-
-
 '''
 print(f"Unique tokens in TEXT vocabulary: {len(TEXT.vocab)}")
-print(f"Unique tokens in UD_TAG vocabulary: {len(UD_TAGS.vocab)}")
+
 Unique tokens in TEXT vocabulary: 8866
 Unique tokens in UD_TAG vocabulary: 18
 '''
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-BATCH_SIZE = 128
+print("Device: ", device)
+BATCH_SIZE = 5
 
 train_iterator, valid_iterator, test_iterator = data.BucketIterator.splits(
     (train_data, valid_data, test_data),
     batch_size=BATCH_SIZE,
     device=device)
 
-print('ck')
+tagset_size = len(UD_TAGS.vocab)
+print(f"Unique tokens in UD_TAG vocabulary: {len(UD_TAGS.vocab)}")
+
+tag2idx = {}
+for i in range(tagset_size):
+    tag2idx[UD_TAGS.vocab.itos[i]] = i
+
+START_TAG = "<START>"
+STOP_TAG = "<STOP>"
+tag2idx[START_TAG] = len(tag2idx)
+tag2idx[STOP_TAG] = len(tag2idx)
+
+print(tag2idx)
 
 
-'''
 class BiLSTMCRFPOSTagger(nn.Module):
     def __init__(self,
                  input_dim,
@@ -113,46 +124,146 @@ class BiLSTMCRFPOSTagger(nn.Module):
 
         self.fc = nn.Linear(
             hidden_dim * 2 if bidirectional else hidden_dim, output_dim)
-
+        self.target_size = output_dim
         self.dropout = nn.Dropout(dropout)
 
+        self.transitions = nn.Parameter(torch.randn(
+            output_dim, output_dim
+        ))
+    '''
     def forward(self, text):
-
-        # text = [sent len, batch size]
-
-        # pass text through embedding layer
         embedded = self.dropout(self.embedding(text))
-        # sentence_len, batchsize, 100
-        # embedded = [sent len, batch size, emb dim]
-
-        # pass embeddings into LSTM
         outputs, (hidden, cell) = self.lstm(embedded)
-        # sentence_len, batch_size, hidden_size*2
-
-
-        # outputs holds the backward and forward hidden states in the final layer
-        # hidden and cell are the backward and forward hidden and cell states at the final time-step
-
-        # output = [sent len, batch size, hid dim * n directions]
-        # hidden/cell = [n layers * n directions, batch size, hid dim]
-
-        # we use our outputs to make a prediction of what the tag should be
         predictions = self.fc(self.dropout(outputs))
-        # sentence_len, batch_size, 18
-        # predictions = [sent len, batch size, output dim]
-
         return predictions
-
+    '''
 
     def _score_sentence(self, feats, tags):
         # Gives the score of a provided tag sequence
         score = torch.zeros(1)
-        tags = torch.cat([torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long), tags])
+        tags = torch.cat(
+            [torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long), tags])
         for i, feat in enumerate(feats):
             score = score + \
                 self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
         score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
         return score
+
+    def _forward_alg(self, feats):
+        '''
+        this also called alpha-recursion or forward recursion, to calculate log_prob of all barX
+        '''
+
+        # T = self.max_seq_length
+        T = feats.shape[1]
+        batch_size = feats.shape[0]
+
+        # alpha_recursion,forward, alpha(zt)=p(zt,bar_x_1:t)
+        log_alpha = torch.Tensor(
+            batch_size, 1, self.tagset_size).fill_(-10000.).to(self.device)  # [batch_size, 1, 16]
+        # normal_alpha_0 : alpha[0]=Ot[0]*self.PIs
+        # self.start_label has all of the score. it is log,0 is p=1
+        log_alpha[:, 0, self.start_label_id] = 0
+
+        # feats: sentances -> word embedding -> lstm -> MLP -> feats
+        # feats is the probability of emission, feat.shape=(1,tag_size)
+        for t in range(1, T):
+            log_alpha = (log_sum_exp_batch(self.transitions +
+                                           log_alpha, axis=-1) + feats[:, t]).unsqueeze(1)
+
+        # log_prob of all barX
+        log_prob_all_barX = log_sum_exp_batch(log_alpha)
+        return log_prob_all_barX
+
+    def _score_sentence(self, feats, label_ids):
+        T = feats.shape[1]
+        batch_size = feats.shape[0]
+
+        batch_transitions = self.transitions.expand(
+            batch_size, self.tagset_size, self.tagset_size)
+        batch_transitions = batch_transitions.flatten(1)
+
+        score = torch.zeros((feats.shape[0], 1)).to(self.device)
+        # the 0th node is start_label->start_word,the probability of them=1. so t begin with 1.
+        for t in range(1, T):
+            score = score + \
+                batch_transitions.gather(-1, (label_ids[:, t]*self.tagset_size+label_ids[:, t-1]).view(-1, 1)) \
+                + feats[:, t].gather(-1, label_ids[:,
+                                                   t].view(-1, 1)).view(-1, 1)
+        return score
+
+    def _bert_enc(self, x):
+        """
+        x: [batchsize, sent_len]
+        enc: [batch_size, sent_len, 768]
+        """
+        with torch.no_grad():
+            encoded_layer, _ = self.bert(x)
+            enc = encoded_layer[-1]
+        return enc
+
+    def _viterbi_decode(self, feats):
+        '''
+        Max-Product Algorithm or viterbi algorithm, argmax(p(z_0:t|x_0:t))
+        '''
+
+        # T = self.max_seq_length
+        T = feats.shape[1]
+        batch_size = feats.shape[0]
+
+        # batch_transitions=self.transitions.expand(batch_size,self.tagset_size,self.tagset_size)
+
+        log_delta = torch.Tensor(
+            batch_size, 1, self.tagset_size).fill_(-10000.).to(self.device)
+        log_delta[:, 0, self.start_label_id] = 0.
+
+        # psi is for the vaule of the last latent that make P(this_latent) maximum.
+        psi = torch.zeros((batch_size, T, self.tagset_size),
+                          dtype=torch.long)  # psi[0]=0000 useless
+        for t in range(1, T):
+            # delta[t][k]=max_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
+            # delta[t] is the max prob of the path from  z_t-1 to z_t[k]
+            log_delta, psi[:, t] = torch.max(self.transitions + log_delta, -1)
+            # psi[t][k]=argmax_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
+            # psi[t][k] is the path choosed from z_t-1 to z_t[k],the value is the z_state(is k) index of z_t-1
+            log_delta = (log_delta + feats[:, t]).unsqueeze(1)
+
+        # trace back
+        path = torch.zeros((batch_size, T), dtype=torch.long)
+
+        # max p(z1:t,all_x|theta)
+        max_logLL_allz_allx, path[:, -1] = torch.max(log_delta.squeeze(), -1)
+
+        for t in range(T-2, -1, -1):
+            # choose the state of z_t according the state choosed of z_t+1.
+            path[:, t] = psi[:, t +
+                             1].gather(-1, path[:, t+1].view(-1, 1)).squeeze()
+
+        return max_logLL_allz_allx, path
+
+    def neg_log_likelihood(self, sentence, tags):
+        feats = self._get_lstm_features(sentence)  # [batch_size, max_len, 16]
+        forward_score = self._forward_alg(feats)
+        gold_score = self._score_sentence(feats, tags)
+        return torch.mean(forward_score - gold_score)
+
+    def _get_lstm_features(self, sentence):
+        """sentence is the ids"""
+        # self.hidden = self.init_hidden()
+        embeds = self.dropout(self.embedding(sentence))  # [batch_size, sentence_len, embd_size]
+        # 过lstm
+        enc, _ = self.lstm(embeds)
+        lstm_feats = self.fc(enc)
+        return lstm_feats  # [8, 75, 16]
+
+    def forward(self, sentence):  # dont confuse this with _forward_alg above.
+        # Get the emission scores from the BiLSTM
+        lstm_feats = self._get_lstm_features(sentence)  # [8, 180,768]
+
+        # Find the best path, given the features.
+        score, tag_seq = self._viterbi_decode(lstm_feats)
+        return score, tag_seq
+
 
 INPUT_DIM = len(TEXT.vocab)
 
@@ -168,13 +279,14 @@ DROPOUT = 0.25
 PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
 
 model = BiLSTMCRFPOSTagger(INPUT_DIM,
-                        EMBEDDING_DIM,
-                        HIDDEN_DIM,
-                        OUTPUT_DIM,
-                        N_LAYERS,
-                        BIDIRECTIONAL,
-                        DROPOUT,
-                        PAD_IDX)
+                           EMBEDDING_DIM,
+                           HIDDEN_DIM,
+                           OUTPUT_DIM,
+                           N_LAYERS,
+                           BIDIRECTIONAL,
+                           DROPOUT,
+                           PAD_IDX,
+                           tag2idx)
 
 
 def init_weights(m):
@@ -227,8 +339,8 @@ def train(model, iterator, optimizer, criterion, tag_pad_idx):
 
     for batch in iterator:
 
-        text = batch.text
-        tags = batch.udtags
+        text = batch.text.permute(1, 0)
+        tags = batch.udtags.permute(1, 0)
         # text: tensor [sentence_len, batch_size]
         optimizer.zero_grad()
 
@@ -241,7 +353,7 @@ def train(model, iterator, optimizer, criterion, tag_pad_idx):
         # sentence_len * batch_size, 18
         tags = tags.view(-1)
         # torch.Size([7424])
-        
+
         # predictions = [sent len * batch size, output dim]
         # tags = [sent len * batch size]
 
@@ -324,5 +436,3 @@ model.load_state_dict(torch.load('model_01.pt'))
 test_loss, test_acc = evaluate(model, test_iterator, criterion, TAG_PAD_IDX)
 
 print(f'Test Loss: {test_loss:.3f} |  Test Acc: {test_acc*100:.2f}%')
-
-'''
