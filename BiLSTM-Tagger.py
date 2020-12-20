@@ -11,6 +11,18 @@ import time
 import random
 import os
 
+import argparse
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('--bidir', default=True)
+parser.add_argument('--hidden_size', default=128)
+parser.add_argument('--epoch', default=5)
+parser.add_argument('--layers', default=2)
+
+
+args = parser.parse_args()
+
 
 SEED = 2020
 
@@ -123,11 +135,15 @@ class BiLSTMPOSTagger(nn.Module):
 
 
 INPUT_DIM = len(TEXT.vocab)
+
 EMBEDDING_DIM = 100
-HIDDEN_DIM = 128
+HIDDEN_DIM = int(args.hidden_size)
+BIDIRECTIONAL = bool(args.bidir)
+N_EPOCHS = int(args.epoch)
+N_LAYERS = int(args.layers)
 OUTPUT_DIM = len(UD_TAGS.vocab)
-N_LAYERS = 2
-BIDIRECTIONAL = True
+
+
 DROPOUT = 0.25
 PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
 
@@ -179,6 +195,9 @@ def categorical_accuracy(preds, y, tag_pad_idx):
     return correct.sum() / torch.FloatTensor([y[non_pad_elements].shape[0]])
 
 
+print(model)
+
+
 def train(model, iterator, optimizer, criterion, tag_pad_idx):
 
     epoch_loss = 0
@@ -192,8 +211,6 @@ def train(model, iterator, optimizer, criterion, tag_pad_idx):
         tags = batch.udtags
 
         optimizer.zero_grad()
-
-        # text = [sent len, batch size]
 
         predictions = model(text)
 
@@ -256,8 +273,6 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-N_EPOCHS = 10
-
 best_valid_loss = float('inf')
 
 for epoch in range(N_EPOCHS):
@@ -280,8 +295,8 @@ for epoch in range(N_EPOCHS):
     print(f'Epoch: {epoch+1:02} | Epoch Time: {epoch_mins}m {epoch_secs}s')
     print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc*100:.2f}%')
     print(f'\t Val. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc*100:.2f}%')
-    
-    
+
+
 model.load_state_dict(torch.load('tut1-model.pt'))
 
 test_loss, test_acc = evaluate(model, test_iterator, criterion, TAG_PAD_IDX)
