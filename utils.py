@@ -20,3 +20,10 @@ def log_sum_exp_batch(log_Tensor, axis=-1):  # shape (batch_size,n,m)
     return torch.max(log_Tensor, axis)[0] + \
         torch.log(torch.exp(log_Tensor-torch.max(log_Tensor, axis)
                             [0].view(log_Tensor.shape[0], -1, 1)).sum(axis))
+
+
+def epoch_time(start_time, end_time):
+    elapsed_time = end_time - start_time
+    elapsed_mins = int(elapsed_time / 60)
+    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
+    return elapsed_mins, elapsed_secs

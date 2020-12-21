@@ -6,7 +6,6 @@ from torchtext import data
 from torchtext import datasets
 
 import numpy as np
-
 import time
 import random
 import os
@@ -21,13 +20,13 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--bidir', default=True)
 parser.add_argument('--hidden_size', default=128)
-parser.add_argument('--epoch', default=15)
+parser.add_argument('--epoch', default=20)
 parser.add_argument('--layers', default=2)
-
-
+parser.add_argument('--batch_size', default=256)
+parser.add_argument('--dropout', default=0.25)
 args = parser.parse_args()
 
-SEED = 2020
+SEED = 1110
 
 random.seed(SEED)
 np.random.seed(SEED)
@@ -52,14 +51,16 @@ TEXT.build_vocab(train_data,
 
 UD_TAGS.build_vocab(train_data)
 
-'''
-Unique tokens in TEXT vocabulary: 8866
-Unique tokens in UD_TAG vocabulary: 18
-'''
+
+# Unique tokens in TEXT vocabulary: 8866
+# Unique tokens in UD_TAG vocabulary: 18
+
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Device: ", device)
-BATCH_SIZE = 512
+
+BATCH_SIZE = int(args.batch_size)
+
 
 train_iterator, valid_iterator, test_iterator = data.BucketIterator.splits(
     (train_data, valid_data, test_data),
@@ -95,19 +96,17 @@ class BI_LSTM_CRF(nn.Module):
                             batch_first=True,
                             dropout=dropout if num_layers > 1 else 0)
 
-
         self.crf = CRF_model(hidden_dim*2, self.tagset_size)
+        self.pad_idx = pad_idx
 
     def __build_features(self, sentences):
 
-        masks = sentences != PAD_IDX
+        masks = sentences != self.pad_idx
 
         embeds = self.embedding(sentences.long())
-
         seq_length = masks.sum(1)
         sorted_seq_length, perm_idx = seq_length.sort(descending=True)
         embeds = embeds[perm_idx, :]
-
         pack_sequence = pack_padded_sequence(
             embeds, lengths=sorted_seq_length, batch_first=True)
         packed_output, _ = self.lstm(pack_sequence)
@@ -140,17 +139,17 @@ N_LAYERS = int(args.layers)
 OUTPUT_DIM = len(UD_TAGS.vocab)
 
 
-DROPOUT = 0.25
+DROPOUT = float(args.dropout)
 PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
 
 model = BI_LSTM_CRF(INPUT_DIM,
-                        EMBEDDING_DIM,
-                        HIDDEN_DIM,
-                        OUTPUT_DIM,
-                        N_LAYERS,
-                        BIDIRECTIONAL,
-                        DROPOUT,
-                        PAD_IDX)
+                    EMBEDDING_DIM,
+                    HIDDEN_DIM,
+                    OUTPUT_DIM,
+                    N_LAYERS,
+                    BIDIRECTIONAL,
+                    DROPOUT,
+                    PAD_IDX)
 
 
 def init_weights(m):
@@ -159,13 +158,15 @@ def init_weights(m):
 
 
 model.apply(init_weights)
+
 print(model)
+
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
 print(f'The model has {count_parameters(model):,} trainable parameters')
+
 pretrained_embeddings = TEXT.vocab.vectors
 
 print(pretrained_embeddings.shape)
@@ -194,20 +195,26 @@ def categorical_accuracy(preds, y, tag_pad_idx):
 print(model)
 
 
-def bilstm_crf_acc(preds, y, tag_pad_idx):
+def comp_acc(preds, y, tag_pad_idx):
+    # y: tensor [batch_size, max_len]
+    # preds: list of tag list, **NEED PADDING**
     batch_size = y.shape[0]
     target_len = y.shape[1]
+    
     pad_pred = []
     for sen in preds:
         sen += [tag_pad_idx]*(target_len - len(sen))
         pad_pred.append(sen)
+    
     target_pred = torch.tensor(pad_pred)
     train_correct = ((target_pred == y)).sum()
+    # total eq num
     pad_eq = (y == tag_pad_idx).sum()
+    # padding num: preds == y == tag_pad_idx
+    
     correct = train_correct.item() - pad_eq.item()
-    ratio = correct / (batch_size * target_len - pad_eq.item())
-    return ratio
 
+    return correct / (batch_size * target_len - pad_eq.item())
 
 
 def train(model, iterator, optimizer, tag_pad_idx):
@@ -227,9 +234,7 @@ def train(model, iterator, optimizer, tag_pad_idx):
         # predictions = model(text)
 
         _, pred = model(text)
-
-        acc = bilstm_crf_acc(pred, tags, tag_pad_idx)
-
+        acc = comp_acc(pred, tags, tag_pad_idx)
         loss.backward()
 
         optimizer.step()
@@ -258,7 +263,7 @@ def evaluate(model, iterator, tag_pad_idx):
 
             _, pred = model(text)
 
-            acc = bilstm_crf_acc(pred, tags, tag_pad_idx)
+            acc = comp_acc(pred, tags, tag_pad_idx)
             # acc = categorical_accuracy(predictions, tags, tag_pad_idx)
 
             epoch_loss += loss.item()
@@ -267,17 +272,10 @@ def evaluate(model, iterator, tag_pad_idx):
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
 
-def epoch_time(start_time, end_time):
-    elapsed_time = end_time - start_time
-    elapsed_mins = int(elapsed_time / 60)
-    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
-    return elapsed_mins, elapsed_secs
-
-
 best_valid_loss = float('inf')
 
 for epoch in range(N_EPOCHS):
-    
+
     start_time = time.time()
 
     train_loss, train_acc = train(

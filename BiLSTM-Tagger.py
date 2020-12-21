@@ -10,7 +10,7 @@ import numpy as np
 import time
 import random
 import os
-
+from utils import *
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -211,18 +211,10 @@ def train(model, iterator, optimizer, criterion, tag_pad_idx):
         tags = batch.udtags
 
         optimizer.zero_grad()
-
         predictions = model(text)
-
-        # predictions = [sent len, batch size, output dim]
-        # tags = [sent len, batch size]
 
         predictions = predictions.view(-1, predictions.shape[-1])
         tags = tags.view(-1)
-
-        # predictions = [sent len * batch size, output dim]
-        # tags = [sent len * batch size]
-
         loss = criterion(predictions, tags)
 
         acc = categorical_accuracy(predictions, tags, tag_pad_idx)
@@ -266,13 +258,6 @@ def evaluate(model, iterator, criterion, tag_pad_idx):
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
 
-def epoch_time(start_time, end_time):
-    elapsed_time = end_time - start_time
-    elapsed_mins = int(elapsed_time / 60)
-    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
-    return elapsed_mins, elapsed_secs
-
-
 best_valid_loss = float('inf')
 
 for epoch in range(N_EPOCHS):
@@ -290,15 +275,14 @@ for epoch in range(N_EPOCHS):
 
     if valid_loss < best_valid_loss:
         best_valid_loss = valid_loss
-        torch.save(model.state_dict(), 'tut1-model.pt')
+        # torch.save(model.state_dict(), 'tut1-model.pt')
 
     print(f'Epoch: {epoch+1:02} | Epoch Time: {epoch_mins}m {epoch_secs}s')
     print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc*100:.2f}%')
     print(f'\t Val. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc*100:.2f}%')
 
 
-model.load_state_dict(torch.load('model_01.pt'))
+    # model.load_state_dict(torch.load('model_01.pt'))
 
-test_loss, test_acc = evaluate(model, test_iterator, TAG_PAD_IDX)
-
-print(f'Test Loss: {test_loss:.3f} |  Test Acc: {test_acc*100:.2f}%')
+    test_loss, test_acc = evaluate(model, test_iterator, TAG_PAD_IDX)
+    print(f'Test Loss: {test_loss:.3f} |  Test Acc: {test_acc*100:.2f}%')
