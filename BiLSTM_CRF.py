@@ -96,7 +96,6 @@ STOP_TAG = "<STOP>"
 tag2idx[START_TAG] = len(tag2idx)
 tag2idx[STOP_TAG] = len(tag2idx)
 
-print(tag2idx)
 
 
 class BiLSTMCRFPOSTagger(nn.Module):
@@ -130,6 +129,8 @@ class BiLSTMCRFPOSTagger(nn.Module):
         self.transitions = nn.Parameter(torch.randn(
             output_dim, output_dim
         ))
+        
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     '''
     def forward(self, text):
         embedded = self.dropout(self.embedding(text))
@@ -158,6 +159,7 @@ class BiLSTMCRFPOSTagger(nn.Module):
         T = feats.shape[1]
         batch_size = feats.shape[0]
 
+
         # alpha_recursion,forward, alpha(zt)=p(zt,bar_x_1:t)
         log_alpha = torch.Tensor(
             batch_size, 1, self.tagset_size).fill_(-10000.).to(self.device)  # [batch_size, 1, 16]
@@ -170,10 +172,14 @@ class BiLSTMCRFPOSTagger(nn.Module):
         for t in range(1, T):
             log_alpha = (log_sum_exp_batch(self.transitions +
                                            log_alpha, axis=-1) + feats[:, t]).unsqueeze(1)
-
+        #
+        # Transition n*n
+        #
         # log_prob of all barX
         log_prob_all_barX = log_sum_exp_batch(log_alpha)
         return log_prob_all_barX
+
+
 
     def _score_sentence(self, feats, label_ids):
         T = feats.shape[1]
@@ -254,7 +260,7 @@ class BiLSTMCRFPOSTagger(nn.Module):
         # 过lstm
         enc, _ = self.lstm(embeds)
         lstm_feats = self.fc(enc)
-        return lstm_feats  # [8, 75, 16]
+        return lstm_feats  # [[batch_size, sentence_len, tarset_size]
 
     def forward(self, sentence):  # dont confuse this with _forward_alg above.
         # Get the emission scores from the BiLSTM
@@ -341,10 +347,14 @@ def train(model, iterator, optimizer, criterion, tag_pad_idx):
 
         text = batch.text.permute(1, 0)
         tags = batch.udtags.permute(1, 0)
-        # text: tensor [sentence_len, batch_size]
+        
+        ## **PERMUTATION** to set size [batch_size, max_len]
+
         optimizer.zero_grad()
 
-        predictions = model(text)
+        
+        loss = model.neg_log_likelihood(text, tags)
+        ## predictions = model(text)
 
         # predictions = [sent len, batch size, output dim]
         # tags = [sent len, batch size]
