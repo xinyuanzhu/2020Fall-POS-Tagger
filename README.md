@@ -1,35 +1,26 @@
 # 2020Fall-NLP-Course-Project-POS-Tagger
-## Common Methods
+## Existing Methods
 1. PGM based: HMM, MEMM, **CRF**
-2. RNN based: RNN, **LSTM**, **BI-LSTM**
-3. **BI-LSTM-CRF**
+2. RNN based: RNN, **LSTM**, **Bi-LSTM**
+3. **Bi-LSTM-CRF**
+
+我们将要复现基于**LSTM**, **Bi-LSTM**, **Bi-LSTM-CRF**这三种方法.
+
+## Dataset
+UDPOS in torchtext
+
+Train, valid, Test #=12543, 2002, 2077 Samples/Sentences.
 
 
 ## Usage
-python BiLSTM-Tagger.py --bidir True --hidden_size 128 --epoch 10 --layers 2
+for LSTM or BiLSTM
 
+python BiLSTM-Tagger.py --bidir True --layers 2 --hidden_size 128 --epoch 30 
+
+for Bi-LSTM-CRF
+
+python BiLSTM-CRF.py --bidir True --layers 2 --hidden_size 128 --epoch 30 
 
 ### Tips
-现在用了glove.6B.100d, so embedding_size不可指定, 就是100
-## Progress
-### Dataset
-UDPOS in torchtext
+word embedding因为使用GloVe预训练向量初始化, dim 暂不可通过命令行指定, 需要修改TEXT.build_vocab()等部分.
 
-Train, valid, Test #=12543, 2002, 2077 Sentences.
-
-
-
-### Baselines
-- LSTM
-- Bi-LSTM
-- CRF 
-
-
-
-
-## TODO
-*0.* 人工标注小数据集, 暂定2020大选新闻
-
-1. BI-LSTM 
-2. CRF
-3. BI-LSTM-CRF

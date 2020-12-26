@@ -6,10 +6,10 @@ from torchtext import data
 from torchtext import datasets
 
 import numpy as np
+
 import time
 import random
-import os
-from torchtext.vocab import Vectors
+
 import argparse
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from CRF import CRF_model
@@ -20,13 +20,13 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--bidir', default=True)
 parser.add_argument('--hidden_size', default=128)
-parser.add_argument('--epoch', default=20)
+parser.add_argument('--epoch', default=30)
 parser.add_argument('--layers', default=2)
-parser.add_argument('--batch_size', default=256)
-parser.add_argument('--dropout', default=0.25)
+
+
 args = parser.parse_args()
 
-SEED = 1110
+SEED = 2020
 
 random.seed(SEED)
 np.random.seed(SEED)
@@ -51,17 +51,14 @@ TEXT.build_vocab(train_data,
 
 UD_TAGS.build_vocab(train_data)
 
+'''
+Unique tokens in TEXT vocabulary: 8866
+Unique tokens in UD_TAG vocabulary: 18
+'''
 
-# Unique tokens in TEXT vocabulary: 8866
-# Unique tokens in UD_TAG vocabulary: 18
-
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
 print("Device: ", device)
-
-BATCH_SIZE = int(args.batch_size)
-
-
+BATCH_SIZE = 256
 train_iterator, valid_iterator, test_iterator = data.BucketIterator.splits(
     (train_data, valid_data, test_data),
     batch_size=BATCH_SIZE,
@@ -97,16 +94,19 @@ class BI_LSTM_CRF(nn.Module):
                             dropout=dropout if num_layers > 1 else 0)
 
         self.crf = CRF_model(hidden_dim*2, self.tagset_size)
-        self.pad_idx = pad_idx
+
+        self.dropout = nn.Dropout(dropout)
 
     def __build_features(self, sentences):
 
-        masks = sentences != self.pad_idx
+        masks = sentences != PAD_IDX
 
-        embeds = self.embedding(sentences.long())
+        embeds = self.dropout(self.embedding(sentences.long()))
+
         seq_length = masks.sum(1)
         sorted_seq_length, perm_idx = seq_length.sort(descending=True)
         embeds = embeds[perm_idx, :]
+
         pack_sequence = pack_padded_sequence(
             embeds, lengths=sorted_seq_length, batch_first=True)
         packed_output, _ = self.lstm(pack_sequence)
@@ -139,7 +139,7 @@ N_LAYERS = int(args.layers)
 OUTPUT_DIM = len(UD_TAGS.vocab)
 
 
-DROPOUT = float(args.dropout)
+DROPOUT = 0.25
 PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
 
 model = BI_LSTM_CRF(INPUT_DIM,
@@ -152,21 +152,11 @@ model = BI_LSTM_CRF(INPUT_DIM,
                     PAD_IDX)
 
 
-def init_weights(m):
-    for name, param in m.named_parameters():
-        nn.init.normal_(param.data, mean=0, std=0.1)
-
-
 model.apply(init_weights)
-
 print(model)
 
 
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 print(f'The model has {count_parameters(model):,} trainable parameters')
-
 pretrained_embeddings = TEXT.vocab.vectors
 
 print(pretrained_embeddings.shape)
@@ -178,65 +168,33 @@ optimizer = optim.Adam(model.parameters())
 
 TAG_PAD_IDX = UD_TAGS.vocab.stoi[UD_TAGS.pad_token]
 
-criterion = nn.CrossEntropyLoss(ignore_index=TAG_PAD_IDX)
 
-
-def categorical_accuracy(preds, y, tag_pad_idx):
-    """
-    Returns accuracy per batch, i.e. if you get 8/10 right, this returns 0.8, NOT 8
-    """
-    max_preds = preds.argmax(
-        dim=1, keepdim=True)  # get the index of the max probability
-    non_pad_elements = (y != tag_pad_idx).nonzero()
-    correct = max_preds[non_pad_elements].squeeze(1).eq(y[non_pad_elements])
-    return correct.sum() / torch.FloatTensor([y[non_pad_elements].shape[0]])
-
-
-print(model)
-
-
-def comp_acc(preds, y, tag_pad_idx):
-    # y: tensor [batch_size, max_len]
-    # preds: list of tag list, **NEED PADDING**
-    batch_size = y.shape[0]
-    target_len = y.shape[1]
-    
-    pad_pred = []
-    for sen in preds:
-        sen += [tag_pad_idx]*(target_len - len(sen))
-        pad_pred.append(sen)
-    
-    target_pred = torch.tensor(pad_pred)
-    train_correct = ((target_pred == y)).sum()
-    # total eq num
-    pad_eq = (y == tag_pad_idx).sum()
-    # padding num: preds == y == tag_pad_idx
-    
-    correct = train_correct.item() - pad_eq.item()
-
-    return correct / (batch_size * target_len - pad_eq.item())
+model.to(device)
 
 
 def train(model, iterator, optimizer, tag_pad_idx):
 
     epoch_loss = 0
     epoch_acc = 0
-
     model.train()
 
     for batch in iterator:
 
-        text = batch.text.permute(1, 0)
-        tags = batch.udtags.permute(1, 0)
+        text = batch.text.permute(1, 0).to(device)
+        tags = batch.udtags.permute(1, 0).to(device)
+        # permutation to transform tensor size
+        # [sent len, batch size] --> [batch size, sent len]
 
         optimizer.zero_grad()
-        loss = model.loss(text.to(device), tags.to(device))
-        # predictions = model(text)
+        loss = model.loss(text, tags)
+        # 不使用CrossEntropyLoss, loss函数由model.loss()方法生成
 
         _, pred = model(text)
-        acc = comp_acc(pred, tags, tag_pad_idx)
-        loss.backward()
+        # 得到tag list
+        acc = bilstm_crf_acc(pred, tags.cpu(), tag_pad_idx)
+        # 计算batch accuracy
 
+        loss.backward()
         optimizer.step()
 
         epoch_loss += loss.item()
@@ -249,22 +207,25 @@ def evaluate(model, iterator, tag_pad_idx):
 
     epoch_loss = 0
     epoch_acc = 0
-
+    model.to(device)
     model.eval()
 
     with torch.no_grad():
-
         for batch in iterator:
 
-            text = batch.text.permute(1, 0)
-            tags = batch.udtags.permute(1, 0)
+            text = batch.text.permute(1, 0).to(device)
+            tags = batch.udtags.permute(1, 0).to(device)
+            # permutation to transform tensor size
+            # [sent len, batch size] --> [batch size, sent len]
 
-            loss = model.loss(text.to(device), tags.to(device))
+            loss = model.loss(text, tags)
+            # 不使用CrossEntropyLoss, loss函数由model.loss()方法生成
 
             _, pred = model(text)
+            # 得到tag list
 
-            acc = comp_acc(pred, tags, tag_pad_idx)
-            # acc = categorical_accuracy(predictions, tags, tag_pad_idx)
+            acc = bilstm_crf_acc(pred, tags.cpu(), tag_pad_idx)
+            # 计算batch accuracy
 
             epoch_loss += loss.item()
             epoch_acc += acc
@@ -289,8 +250,14 @@ for epoch in range(N_EPOCHS):
 
     if valid_loss < best_valid_loss:
         best_valid_loss = valid_loss
-        torch.save(model.state_dict(), 'tut1-model.pt')
+        torch.save(model.state_dict(), 'Bi_LSTM_CRF.pt')
 
     print(f'Epoch: {epoch+1:02} | Epoch Time: {epoch_mins}m {epoch_secs}s')
     print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc*100:.2f}%')
     print(f'\t Val. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc*100:.2f}%')
+
+    # model.load_state_dict(torch.load('model.pt'))
+
+    test_loss, test_acc = evaluate(model, test_iterator, TAG_PAD_IDX)
+
+    print(f'Test Loss: {test_loss:.3f} |  Test Acc: {test_acc*100:.2f}%')

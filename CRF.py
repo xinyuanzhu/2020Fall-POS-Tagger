@@ -3,13 +3,8 @@ import torch.nn as nn
 
 
 def log_sum_exp(x):
-    """calculate log(sum(exp(x))) = max(x) + log(sum(exp(x - max(x))))
-    """
     max_score = x.max(-1)[0]
     return max_score + (x - max_score.unsqueeze(-1)).exp().sum(-1).log()
-
-
-IMPOSSIBLE = -1e4
 
 
 class CRF_model(nn.Module):
@@ -31,8 +26,8 @@ class CRF_model(nn.Module):
         self.transitions = nn.Parameter(torch.randn(
             self.num_tags, self.num_tags), requires_grad=True)
 
-        self.transitions.data[self.start_idx, :] = IMPOSSIBLE
-        self.transitions.data[:, self.stop_idx] = IMPOSSIBLE
+        self.transitions.data[self.start_idx, :] = -1e4
+        self.transitions.data[:, self.stop_idx] = -1e4
 
     def forward(self, features, masks):
 
@@ -54,18 +49,17 @@ class CRF_model(nn.Module):
 
         B, L, C = features.shape
 
-        # emission score
         emit_scores = features.gather(
             dim=2, index=tags.unsqueeze(-1)).squeeze(-1)
         # transition score
         start_tag = torch.full((B, 1), self.start_idx,
                                dtype=torch.long, device=tags.device)
-        tags = torch.cat([start_tag, tags], dim=1)  # [B, L+1]
+        tags = torch.cat([start_tag, tags], dim=1)
         trans_scores = self.transitions[tags[:, 1:], tags[:, :-1]]
 
         # last transition score to STOP tag
         last_tag = tags.gather(dim=1, index=masks.sum(
-            1).long().unsqueeze(1)).squeeze(1)  # [B]
+            1).long().unsqueeze(1)).squeeze(1)
         last_score = self.transitions[self.stop_idx, last_tag]
 
         score = ((trans_scores + emit_scores) * masks).sum(1) + last_score
@@ -76,30 +70,26 @@ class CRF_model(nn.Module):
         B, L, C = features.shape
 
         bps = torch.zeros(B, L, C, dtype=torch.long,
-                          device=features.device)  # back pointers
+                          device=features.device)
 
-        # Initialize the viterbi variables in log space
         max_score = torch.full(
-            (B, C), IMPOSSIBLE, device=features.device)  # [B, C]
+            (B, C), -1e4, device=features.device)
         max_score[:, self.start_idx] = 0
 
         for t in range(L):
-            mask_t = masks[:, t].unsqueeze(1)  # [B, 1]
-            emit_score_t = features[:, t]  # [B, C]
+            mask_t = masks[:, t].unsqueeze(1)
+            emit_score_t = features[:, t]
 
-            # [B, 1, C] + [C, C]
             acc_score_t = max_score.unsqueeze(
-                1) + self.transitions  # [B, C, C]
+                1) + self.transitions
             acc_score_t, bps[:, t, :] = acc_score_t.max(dim=-1)
             acc_score_t += emit_score_t
             max_score = acc_score_t * mask_t + max_score * \
-                (1 - mask_t)  # max_score or acc_score_t
+                (1 - mask_t)
 
-        # Transition to STOP_TAG
         max_score += self.transitions[self.stop_idx]
         best_score, best_tag = max_score.max(dim=-1)
 
-        # Follow the back pointers to decode the best path.
         best_paths = []
         bps = bps.cpu().numpy()
         for b in range(B):
@@ -110,7 +100,7 @@ class CRF_model(nn.Module):
             for bps_t in reversed(bps[b, :seq_len]):
                 best_tag_b = bps_t[best_tag_b]
                 best_path.append(best_tag_b)
-            # drop the last tag and reverse the left
+
             best_paths.append(best_path[-2::-1])
 
         return best_score, best_paths
@@ -119,19 +109,18 @@ class CRF_model(nn.Module):
 
         B, L, C = features.shape
 
-        scores = torch.full((B, C), IMPOSSIBLE,
-                            device=features.device)  # [B, C]
+        scores = torch.full((B, C), -1e4,
+                            device=features.device)
         scores[:, self.start_idx] = 0.
-        trans = self.transitions.unsqueeze(0)  # [1, C, C]
+        trans = self.transitions.unsqueeze(0)
 
-        # Iterate through the sentence
         for t in range(L):
-            emit_score_t = features[:, t].unsqueeze(2)  # [B, C, 1]
-            # [B, 1, C] + [1, C, C] + [B, C, 1] => [B, C, C]
-            score_t = scores.unsqueeze(1) + trans + emit_score_t
-            score_t = log_sum_exp(score_t)  # [B, C]
+            emit_score_t = features[:, t].unsqueeze(2)
 
-            mask_t = masks[:, t].unsqueeze(1)  # [B, 1]
+            score_t = scores.unsqueeze(1) + trans + emit_score_t
+            score_t = log_sum_exp(score_t)
+
+            mask_t = masks[:, t].unsqueeze(1)
             scores = score_t * mask_t + scores * (1 - mask_t)
         scores = log_sum_exp(scores + self.transitions[self.stop_idx])
         return scores
