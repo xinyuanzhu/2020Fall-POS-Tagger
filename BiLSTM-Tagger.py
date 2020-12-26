@@ -70,8 +70,15 @@ print(f"Unique tokens in TEXT vocabulary: {len(TEXT.vocab)}")
 print(f"Unique tokens in UD_TAG vocabulary: {len(UD_TAGS.vocab)}")
 Unique tokens in TEXT vocabulary: 8866
 Unique tokens in UD_TAG vocabulary: 18
+
+
+
 '''
 
+for i in range(len(UD_TAGS.vocab)):
+    print(UD_TAGS.vocab.itos[i])
+
+'''
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 BATCH_SIZE = 128
 
@@ -286,3 +293,4 @@ for epoch in range(N_EPOCHS):
 
     test_loss, test_acc = evaluate(model, test_iterator, TAG_PAD_IDX)
     print(f'Test Loss: {test_loss:.3f} |  Test Acc: {test_acc*100:.2f}%')
+'''
