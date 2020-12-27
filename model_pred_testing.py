@@ -1,14 +1,12 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torchtext import data
 from torchtext import datasets
-from torchtext.datasets import SequenceTaggingDataset
-import nltk
+
 from CRF import CRF_model
 import numpy as np
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-import time
+
 import random
 from utils import *
 
@@ -42,10 +40,8 @@ UD_TAGS.build_vocab(train_data)
 device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
 
 
-path = 'testing_corpus.txt'
-
-test = datasets.UDPOS(
-    path=path, fields=fields)
+path = "testing_corpus.txt"
+test = datasets.UDPOS(path=path, fields=fields)
 
 
 test_iterator = data.BucketIterator(
@@ -112,7 +108,6 @@ class BI_LSTM_CRF(nn.Module):
         return loss
 
     def forward(self, xs):
-        # Get the emission scores from the BiLSTM
         features, masks = self.__build_features(xs)
         scores, tag_seq = self.crf(features, masks)
 
@@ -145,7 +140,6 @@ model.load_state_dict(torch.load('Bi_LSTM_CRF.pt', map_location=device))
 
 
 def test(model, iterator,  tag_pad_idx):
-
     epoch_acc = 0
     predict = []
     tags = []
@@ -167,4 +161,4 @@ def test(model, iterator,  tag_pad_idx):
 
 
 valid_acc, predict = test(model, test_iterator, TAG_PAD_IDX)
-print(valid_acc)
+print("Testing on new corpus:\nacc:", valid_acc)
