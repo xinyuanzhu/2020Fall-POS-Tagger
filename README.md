@@ -4,7 +4,9 @@
 2. RNN based: RNN, **LSTM**, **Bi-LSTM**
 3. **Bi-LSTM-CRF**
 
-我们将要复现基于**LSTM**, **Bi-LSTM**, **Bi-LSTM-CRF**这三种方法.
+
+We reproduced the POS tagger based on **LSTM**, **Bi-LSTM**, **Bi-LSTM-CRF**.
+
 
 ## Dataset
 UDPOS in torchtext
@@ -13,14 +15,19 @@ Train, valid, Test #=12543, 2002, 2077 Samples/Sentences.
 
 
 ## Usage
-for LSTM or BiLSTM
+- for LSTM or BiLSTM
 
-python BiLSTM-Tagger.py --bidir True --layers 2 --hidden_size 128 --epoch 30 
+> python BiLSTM-Tagger.py --bidir True --layers 2 --hidden_size 128 --epoch 40 
 
-for Bi-LSTM-CRF
+- for Bi-LSTM-CRF
 
-python BiLSTM-CRF.py --bidir True --layers 2 --hidden_size 128 --epoch 30 
+> python BiLSTM-CRF.py --bidir True --layers 2 --hidden_size 128 --epoch 40 
+
+- To test your own corpus, data should be preprocessed to the form in "testing_corpus.txt" and you need to edit the file path in "model_pred_testing.py".
+
+> python model_pred_testing.py
+
 
 ### Tips
-word embedding因为使用GloVe预训练向量初始化, dim 暂不可通过命令行指定, 需要修改TEXT.build_vocab()等部分.
+To specify **EMBEDDING DIM** of our models, you need to modify the build_vocab process of TEXT and the corresponding model parameters.
 
