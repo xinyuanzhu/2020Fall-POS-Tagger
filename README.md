@@ -1,4 +1,5 @@
 # 2020Fall-NLP-Course-Project-POS-Tagger
+https://github.com/xinyuanzhu/2020Fall-POS-Tagger
 ## Existing Methods
 1. PGM based: HMM, MEMM, **CRF**
 2. RNN based: RNN, **LSTM**, **Bi-LSTM**
